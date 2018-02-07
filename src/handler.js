@@ -1,41 +1,54 @@
 'use strict';
 require('dotenv').load();
+require('./models/user');
 const mongoose = require('mongoose');
-const User = require('./models/user');
+const User = mongoose.model('User');
+//const User = require('./models/user');
 const PrAuthor = require('./models/pr-author');
 const github = require('./utils/github');
 const mongo = require('./utils/mongo');
 
-module.exports.updatePrAuthors = (event, context, callback) => {
-	context.callbackWaitsForEmptyEventLoop = false;
-	let response = {
-		isBase64Encoded: false,
-		statusCode: 200,
-		headers: null,
-		body: JSON.stringify({ text: 'that shit ran bro!' })
+const getPaginatedPrData = async url => {
+	let data = [];
+	const getPage = async n => {
+		const newData = await github.GET(`${url}?page=${n}&per_page=100`);
+		console.log('oahsdfouan voauh');
+		console.log('newData', newData);
+		//check here
+		data = [...data, ...newData];
+
+		if (Array.isArray(newData) && newData.length > 0) return await getPage(n + 1);
 	};
-	mongo.connect().then(() => {
-		const ghPromise = github.GET('/repos/Dermveda/dermveda-frontend/pulls?state=all');
+	await getPage(1);
+	return data;
+};
+module.exports.updatePrAuthors = async (event, context, callback) => {
+	console.log('called');
+	context.callbackWaitsForEmptyEventLoop = false;
+	try {
+		let response = {
+			isBase64Encoded: false,
+			statusCode: 200,
+			headers: null,
+			body: JSON.stringify({ text: 'Done' })
+		};
+		await mongo.connect();
+		const ghData = await getPaginatedPrData('/repos/Dermveda/dermveda-api/commits');
 		let prAuthors = [];
-		ghPromise.then(data => {
-			const authors = github.getUniqueAuthors(data);
-			let bulk = PrAuthor.collection.initializeOrderedBulkOp();
-			authors.forEach((author, i) => {
-				bulk
-					.find({ githubID: author.githubID })
-					.upsert()
-					.updateOne(author);
-			});
+		const authors = github.getUniqueAuthors(ghData);
+		await PrAuthor.collection.drop();
+		let bulk = PrAuthor.collection.initializeOrderedBulkOp();
+		authors.forEach((author, i) => {
 			bulk
-				.execute()
-				.then(() => {
-					callback(null, response);
-				})
-				.catch(err => {
-					console.log('Error', err);
-				});
+				.find({ githubID: author.githubID })
+				.upsert()
+				.updateOne(author);
 		});
-	});
+		await bulk.execute();
+		callback(null, response);
+	} catch (e) {
+		console.log('Error', e);
+	}
 };
 
 module.exports.getPrAuthors = (event, context, callback) => {
@@ -49,10 +62,14 @@ module.exports.getPrAuthors = (event, context, callback) => {
 	mongo
 		.connect()
 		.then(() => {
-			PrAuthor.find().then(results => {
-				response.body = JSON.stringify(results);
-				callback(null, response);
-			});
+			PrAuthor.find()
+				.then(results => {
+					response.body = JSON.stringify(results);
+					callback(null, response);
+				})
+				.catch(err => {
+					console.log('getPrAuthors Error', err);
+				});
 		})
 		.catch(() => {
 			callback(null, response);
